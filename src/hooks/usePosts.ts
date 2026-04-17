@@ -55,22 +55,33 @@ export function usePost(id: string) {
 
 export function useIngestPost() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
 
   return useMutation({
     mutationFn: async (url: string): Promise<{ post_id: string }> => {
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ingest`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
-        },
-        body: JSON.stringify({ url }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: res.statusText }))
-        throw new Error(err.message ?? 'Ingest failed')
-      }
-      return res.json()
+      // Check duplicate
+      const { data: existing } = await supabase
+        .from('posts')
+        .select('id')
+        .eq('user_id', user!.id)
+        .eq('source_url', url)
+        .maybeSingle()
+
+      if (existing) return { post_id: existing.id as string }
+
+      const platform = url.includes('instagram.com') ? 'instagram'
+        : url.includes('tiktok.com') ? 'tiktok'
+        : url.includes('pinterest.com') ? 'pinterest'
+        : 'web'
+
+      const { data, error } = await supabase
+        .from('posts')
+        .insert({ user_id: user!.id, source_url: url, source_platform: platform, status: 'pending' })
+        .select('id')
+        .single()
+
+      if (error) throw new Error(error.message)
+      return { post_id: data.id as string }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['posts'] })
